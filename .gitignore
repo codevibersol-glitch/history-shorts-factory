@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Application output
+output/*.mp4
+output/*.mp3
+output/*.wav
+output/*.srt
+
+# Logs
+logs/*.log
+logs/*.zip
+
+# Temporary files
+temp/*
+!temp/.gitkeep
+
+# OAuth tokens
+token.json
+*.json
+
+# YouTube credentials (keep template)
+client_secrets.json
+!client_secrets.json.example
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
