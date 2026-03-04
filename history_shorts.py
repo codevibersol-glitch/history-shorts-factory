@@ -419,6 +419,40 @@ def create_success_panel(result: Dict[str, Any]) -> Panel:
     )
     return panel
 
+def create_upload_panel(script) -> Panel:
+    """Create a panel with ready-to-copy YouTube title and description."""
+    tags = script.tags + config["default_tags"].split(",")
+    hashtags = " ".join(f"#{t.replace(' ', '')}" for t in tags[:6])
+
+    title_templates = [
+        f"{script.title} - The Untold Story",
+        f"The Shocking Truth About {script.title}",
+        f"{script.title}: History's Most Dramatic Moment",
+        f"You Won't Believe What Happened During {script.title}",
+    ]
+    title = random.choice(title_templates)
+
+    description = (
+        f"{script.title} — the incredible true story.\n\n"
+        f"{script.wikipedia_summary[:300].rstrip()}...\n\n"
+        f"#History #Shorts #Educational {hashtags}"
+    )
+
+    content = (
+        f"[bold cyan]TITLE[/bold cyan]\n"
+        f"{title}\n\n"
+        f"[bold cyan]DESCRIPTION[/bold cyan]\n"
+        f"{description}"
+    )
+
+    return Panel(
+        content,
+        title="[bold yellow]📋 Ready to Upload[/bold yellow]",
+        box=box.ROUNDED,
+        border_style="yellow",
+        padding=(1, 2),
+    )
+
 def create_error_panel(error_message: str, suggestion: str) -> Panel:
     """Create an error panel with helpful suggestion."""
     panel = Panel(
@@ -1656,6 +1690,7 @@ class HistoryShortsPipeline:
                 result["file_size"] = self.video_assembler._format_file_size(
                     final_assets.video_path.stat().st_size
                 )
+                result["script"] = script
                 console.print(f"  [green]✓[/green] Final: {final_assets.video_path.name}")
 
             result["success"] = True
@@ -1769,6 +1804,9 @@ def _run_single(
             if not quiet:
                 console.print()
                 console.print(create_success_panel(result))
+                if result.get("script"):
+                    console.print()
+                    console.print(create_upload_panel(result["script"]))
             logger.info(f"🎉 Video generation complete: {result['video_path']}")
         else:
             error_msg = result.get('error', 'Unknown error')
