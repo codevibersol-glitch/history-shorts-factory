@@ -40,13 +40,9 @@ logs/*.zip
 temp/*
 !temp/.gitkeep
 
-# OAuth tokens
+# OAuth tokens & credentials
 token.json
 *.json
-
-# YouTube credentials (keep template)
-client_secrets.json
-!client_secrets.json.example
 
 # Test files
 .pytest_cache/
