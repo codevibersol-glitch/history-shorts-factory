@@ -6,6 +6,13 @@ Give it a topic → get a ready-to-upload Short in minutes.
 
 ---
 
+## Examples
+
+- [Six-Day War](https://www.youtube.com/shorts/f7TNmFUY60g)
+- [Battle of Waterloo](https://www.youtube.com/shorts/znZw7sIfTY4)
+
+---
+
 ## How It Works
 
 ```
@@ -19,7 +26,7 @@ Grok Imagine generates 4–5 cinematic 9:16 video clips
   ↓
 ffmpeg assembles: video loops to fill full narrator duration + audio muxed
   ↓
-Final Short ready (optionally auto-uploads to YouTube)
+Final Short ready to upload
 ```
 
 ---
@@ -30,7 +37,6 @@ Final Short ready (optionally auto-uploads to YouTube)
 - **Cinematic Video** — Grok Imagine generates era-accurate BBC/Netflix-style footage. Intro clip gets a title card; subsequent clips cycle through battle action, key figures, aftermath, and artifacts.
 - **Natural Narration** — Microsoft edge-tts with Christopher Neural voice. No API key, no cost, runs locally.
 - **Smart Assembly** — ffmpeg scales video to 1080×1920, loops it to match narrator length, muxes TTS audio. Zero silent gaps.
-- **YouTube Upload** — Optional direct upload with title, description, tags, and thumbnail.
 
 ---
 
@@ -39,7 +45,7 @@ Final Short ready (optionally auto-uploads to YouTube)
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/history-shorts-factory
+git clone https://github.com/codevibersol-glitch/history-shorts-factory
 cd history-shorts-factory
 python -m venv venv
 source venv/bin/activate
@@ -52,11 +58,10 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and add your keys:
+Edit `.env` and add your key:
 
 ```env
-XAI_API_KEY=your_xai_api_key_here           # xAI API — for Grok script + Grok Imagine video
-YOUTUBE_CLIENT_SECRETS=client_secrets.json  # optional — only needed for YouTube upload
+XAI_API_KEY=your_xai_api_key_here  # xAI API — for Grok script + Grok Imagine video
 ```
 
 Get your xAI API key at [console.x.ai](https://console.x.ai)
@@ -67,11 +72,8 @@ Get your xAI API key at [console.x.ai](https://console.x.ai)
 # Generate a Short (Grok Imagine video + edge-tts audio)
 python history_shorts.py run --topic "Battle of Waterloo" --use-grok-imagine
 
-# Generate + upload to YouTube
-python history_shorts.py run --topic "Six-Day War" --use-grok-imagine --upload
-
 # Get topic suggestions
-python history_shorts.py suggest-topics
+python history_shorts.py topics
 ```
 
 ---
@@ -81,7 +83,6 @@ python history_shorts.py suggest-topics
 - Python 3.10+
 - ffmpeg installed (`brew install ffmpeg` on macOS)
 - xAI API key (for Grok script generation + Grok Imagine video)
-- YouTube API credentials (optional, only for auto-upload)
 
 ---
 
@@ -104,7 +105,6 @@ Each run produces in `output/`:
 | Text-to-speech | [edge-tts](https://github.com/rany2/edge-tts) — Microsoft Neural voices, free |
 | Video assembly | ffmpeg |
 | Wikipedia research | `wikipedia` Python library |
-| YouTube upload | YouTube Data API v3 |
 
 ---
 
@@ -115,7 +115,6 @@ See [`.env.example`](.env.example) for all options.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `XAI_API_KEY` | ✅ | xAI API key for Grok script + video |
-| `YOUTUBE_CLIENT_SECRETS` | Optional | Path to YouTube OAuth credentials |
 | `TTS_VOICE` | Optional | edge-tts voice (default: `en-US-ChristopherNeural`) |
 | `VIDEO_DURATION` | Optional | Target duration in seconds (default: `55`) |
 | `GROK_SCRIPT_MODEL` | Optional | Grok text model (default: `grok-4-1-fast-reasoning`) |

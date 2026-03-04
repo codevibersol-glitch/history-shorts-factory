@@ -9,17 +9,14 @@ A fully automatic CLI tool that generates engaging 45-60 second YouTube Shorts
 about history, wars, battles, and interesting facts.
 
 Features:
-  • Wikipedia-based research & script generation
-  • Grok Imagine Video API integration (with MoviePy fallback)
+  • Grok API script writing (grok-4-1-fast-reasoning)
+  • Grok Imagine Video API for cinematic 9:16 clips
   • Professional TTS with edge-tts
-  • Animated karaoke-style subtitles
-  • Direct YouTube upload
   • Daily automation mode
   • Beautiful live terminal UI
 
 Usage:
-  python history_shorts.py run --topic "World War II"
-  python history_shorts.py run --daily --upload
+  python history_shorts.py run --topic "World War II" --use-grok-imagine
   python history_shorts.py run --verbose --use-grok-imagine
 """
 
@@ -88,14 +85,6 @@ from moviepy.editor import (
 )
 from moviepy.video.fx.all import fadein, fadeout
 from PIL import Image, ImageDraw, ImageFont
-
-# YouTube API
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from googleapiclient.errors import HttpError
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
 
 # Retries & Resilience
 from tenacity import (
@@ -207,8 +196,6 @@ load_dotenv(BASE_DIR / ".env")
 # Configuration from environment
 config = {
     "xai_api_key": os.getenv("XAI_API_KEY", ""),
-    "youtube_client_secrets": os.getenv("YOUTUBE_CLIENT_SECRETS", "client_secrets.json"),
-    "youtube_scopes": os.getenv("YOUTUBE_SCOPES", "https://www.googleapis.com/auth/youtube.upload").split(","),
     "default_topic": os.getenv("DEFAULT_TOPIC", "World War II"),
     "video_duration": int(os.getenv("VIDEO_DURATION", "55")),
     "tts_voice": os.getenv("TTS_VOICE", DEFAULT_TTS_VOICE),
@@ -219,8 +206,6 @@ config = {
     "subtitle_font_size": int(os.getenv("SUBTITLE_FONT_SIZE", "56")),
     "subtitle_color": os.getenv("SUBTITLE_COLOR", "yellow"),
     "subtitle_outline_color": os.getenv("SUBTITLE_OUTLINE_COLOR", "black"),
-    "upload_privacy": os.getenv("UPLOAD_PRIVACY", "public"),
-    "youtube_category_id": os.getenv("YOUTUBE_CATEGORY_ID", "22"),
     "default_tags": os.getenv("DEFAULT_TAGS", "history,shorts,facts,educational"),
     "debug": os.getenv("DEBUG", "false").lower() == "true",
     "max_retries": int(os.getenv("MAX_RETRIES", "3")),
@@ -359,14 +344,6 @@ class VideoAssets:
     thumbnail_path: Optional[Path] = None
     duration: float = 0.0
 
-@dataclass
-class UploadResult:
-    """Container for YouTube upload result."""
-    success: bool
-    video_id: Optional[str] = None
-    url: Optional[str] = None
-    error: Optional[str] = None
-
 # =============================================================================
 # UI COMPONENTS
 # =============================================================================
@@ -432,9 +409,6 @@ def create_success_panel(result: Dict[str, Any]) -> Panel:
     table.add_row("🎬 Video:", f"[green]{result.get('video_path', 'N/A')}[/green]")
     table.add_row("⏱️  Duration:", f"{result.get('duration', 0):.1f}s")
     table.add_row("📊 File Size:", result.get('file_size', 'N/A'))
-    
-    if result.get('uploaded') and result.get('url'):
-        table.add_row("🔗 YouTube:", f"[bold green underline]{result['url']}[/bold green underline]")
     
     panel = Panel(
         table,
@@ -1607,203 +1581,24 @@ class VideoAssembler:
         return f"{size_bytes:.1f} TB"
 
 # =============================================================================
-# STEP 6: YOUTUBE UPLOAD
-# =============================================================================
-
-class YouTubeUploader:
-    """Upload videos to YouTube as Shorts."""
-    
-    SCOPES = config["youtube_scopes"]
-    CLIENT_SECRETS_FILE = config["youtube_client_secrets"]
-    TOKEN_FILE = TOKEN_FILE
-    API_SERVICE_NAME = "youtube"
-    API_VERSION = "v3"
-    
-    def __init__(self):
-        self.youtube = None
-        self._authenticate()
-    
-    def _authenticate(self) -> None:
-        """Authenticate with YouTube API."""
-        creds = None
-        
-        # Load existing token
-        if os.path.exists(self.TOKEN_FILE):
-            creds = Credentials.from_authorized_user_file(self.TOKEN_FILE, self.SCOPES)
-        
-        # Refresh or get new credentials
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                except Exception as e:
-                    logger.warning(f"Token refresh failed: {e}")
-                    creds = None
-            
-            if not creds:
-                if not os.path.exists(self.CLIENT_SECRETS_FILE):
-                    logger.warning(f"⚠️  Client secrets file not found: {self.CLIENT_SECRETS_FILE}")
-                    logger.warning("📖 See README for YouTube API setup instructions")
-                    return
-                
-                try:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        self.CLIENT_SECRETS_FILE, self.SCOPES
-                    )
-                    creds = flow.run_local_server(port=0, open_browser=False)
-                    
-                    # Save token
-                    with open(self.TOKEN_FILE, "w") as token:
-                        token.write(creds.to_json())
-                    
-                    logger.info("✅ YouTube authentication successful")
-                except Exception as e:
-                    logger.error(f"❌ YouTube authentication failed: {e}")
-                    return
-        
-        # Build YouTube API client
-        try:
-            self.youtube = build(self.API_SERVICE_NAME, self.API_VERSION, credentials=creds)
-            logger.info("✅ YouTube API client initialized")
-        except Exception as e:
-            logger.error(f"❌ Failed to build YouTube client: {e}")
-    
-    @retry_decorator()
-    def upload(self, video_assets: VideoAssets, script: ScriptData) -> UploadResult:
-        """Upload video to YouTube as a Short."""
-        if not self.youtube:
-            return UploadResult(
-                success=False,
-                error="YouTube API not authenticated",
-            )
-        
-        logger.info("📤 Uploading to YouTube...")
-        
-        video_path = video_assets.video_path
-        if not video_path or not video_path.exists():
-            return UploadResult(
-                success=False,
-                error=f"Video file not found: {video_path}",
-            )
-        
-        # Prepare video metadata
-        title = self._generate_title(script)
-        description = self._generate_description(script)
-        tags = script.tags + config["default_tags"].split(",")
-        
-        # Create media upload
-        media = MediaFileUpload(
-            str(video_path),
-            mimetype="video/mp4",
-            resumable=True,
-            chunksize=1024 * 1024,  # 1MB chunks
-        )
-        
-        # Create video body
-        body = {
-            "snippet": {
-                "title": title,
-                "description": description,
-                "tags": tags[:50],  # YouTube limit: 50 tags
-                "categoryId": config["youtube_category_id"],
-            },
-            "status": {
-                "privacyStatus": config["upload_privacy"],
-                "selfDeclaredMadeForKids": False,
-            },
-        }
-        
-        try:
-            # Upload video
-            request = self.youtube.videos().insert(
-                part=",".join(body.keys()),
-                body=body,
-                media_body=media,
-            )
-            
-            response = None
-            while response is None:
-                status, response = request.next_chunk()
-                if status:
-                    progress = int(status.progress() * 100)
-                    logger.debug(f"Upload progress: {progress}%")
-            
-            video_id = response.get("id")
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            logger.info(f"✅ Video uploaded successfully: [green]{video_url}[/green]")
-            
-            return UploadResult(
-                success=True,
-                video_id=video_id,
-                url=video_url,
-            )
-            
-        except HttpError as e:
-            error_details = e.content.decode() if e.content else str(e)
-            logger.error(f"❌ YouTube upload failed: {error_details}")
-            return UploadResult(
-                success=False,
-                error=f"YouTube API error: {error_details}",
-            )
-        except Exception as e:
-            logger.error(f"❌ Upload failed: {e}")
-            return UploadResult(
-                success=False,
-                error=str(e),
-            )
-    
-    def _generate_title(self, script: ScriptData) -> str:
-        """Generate an engaging YouTube title."""
-        templates = [
-            f"{script.title} - The Untold Story 🏛️",
-            f"The Shocking Truth About {script.title} ⚔️",
-            f"{script.title}: History's Most Dramatic Moment 📜",
-            f"You Won't Believe What Happened During {script.title} 😱",
-            f"{script.title} - A Tale of Courage and Destiny 🎭",
-        ]
-        return random.choice(templates)
-    
-    def _generate_description(self, script: ScriptData) -> str:
-        """Generate YouTube description with SEO optimization."""
-        description = f"""
-{script.title} - An engaging historical short!
-
-📚 About this video:
-{script.wikipedia_summary[:500]}
-
-🔔 Subscribe for more history content!
-
-📌 Tags: {", ".join(script.tags[:10])}
-
-#History #Shorts #Educational #{" ".join(script.tags[:3])}
-
----
-Generated by History Shorts Factory
-"""
-        return description.strip()
-
-# =============================================================================
 # MAIN PIPELINE
 # =============================================================================
 
 class HistoryShortsPipeline:
     """Main pipeline orchestrating all steps."""
     
-    def __init__(self, use_grok: bool = False, local_only: bool = False, 
-                 upload: bool = False, verbose: bool = False):
+    def __init__(self, use_grok: bool = False, local_only: bool = False,
+                 verbose: bool = False):
         self.use_grok = use_grok
         self.local_only = local_only
-        self.upload = upload
         self.verbose = verbose
-        
+
         # Initialize components
         self.script_generator = ScriptGenerator()
         self.video_generator = VideoGenerator(use_grok=use_grok, local_only=local_only)
         self.tts_generator = TTSGenerator()
         self.subtitle_generator = SubtitleGenerator()
         self.video_assembler = VideoAssembler()
-        self.youtube_uploader = YouTubeUploader() if upload else None
     
     def run(self, topic: str) -> Dict[str, Any]:
         """Execute the full pipeline with live Rich progress bars."""
@@ -1813,8 +1608,6 @@ class HistoryShortsPipeline:
             "video_path": None,
             "duration": 0,
             "file_size": None,
-            "uploaded": False,
-            "url": None,
             "error": None,
         }
 
@@ -1865,21 +1658,6 @@ class HistoryShortsPipeline:
                 )
                 console.print(f"  [green]✓[/green] Final: {final_assets.video_path.name}")
 
-                # Step 6: Upload to YouTube (optional)
-                if self.upload and self.youtube_uploader:
-                    t6 = progress.add_task("📤 Uploading to YouTube Shorts...", total=100)
-                    upload_result = self.youtube_uploader.upload(final_assets, script)
-                    progress.update(t6, completed=100)
-                    if upload_result.success:
-                        result["uploaded"] = True
-                        result["url"] = upload_result.url
-                        console.print(f"  [green]✓[/green] Uploaded: {upload_result.url}")
-                    else:
-                        console.print(f"  [red]✗[/red] Upload failed: {upload_result.error}")
-                        result["error"] = upload_result.error
-                elif self.upload:
-                    console.print("\n[yellow]⚠️  Upload requested but YouTube not configured[/yellow]")
-
             result["success"] = True
             return result
 
@@ -1904,11 +1682,6 @@ def run(
         None,
         "--topic", "-t",
         help="History topic to generate content about (e.g., 'World War II', 'Ancient Rome')",
-    ),
-    upload: bool = typer.Option(
-        False,
-        "--upload/--no-upload",
-        help="Upload generated video to YouTube",
     ),
     daily: bool = typer.Option(
         False,
@@ -1938,10 +1711,9 @@ def run(
 ) -> None:
     """
     Generate a history YouTube Short.
-    
+
     Examples:
-        python history_shorts.py run --topic "World War II"
-        python history_shorts.py run --topic "Ancient Egypt" --upload
+        python history_shorts.py run --topic "World War II" --use-grok-imagine
         python history_shorts.py run --daily --use-grok-imagine
         python history_shorts.py run -t "Battle of Waterloo" -v
     """
@@ -1959,7 +1731,6 @@ def run(
     if daily:
         _run_daily_mode(
             topic=actual_topic,
-            upload=upload,
             use_grok_imagine=use_grok_imagine,
             local_only=local_only,
             verbose=verbose,
@@ -1968,7 +1739,6 @@ def run(
     else:
         _run_single(
             topic=actual_topic,
-            upload=upload,
             use_grok_imagine=use_grok_imagine,
             local_only=local_only,
             verbose=verbose,
@@ -1977,7 +1747,6 @@ def run(
 
 def _run_single(
     topic: str,
-    upload: bool,
     use_grok_imagine: bool,
     local_only: bool,
     verbose: bool,
@@ -1989,7 +1758,6 @@ def _run_single(
         pipeline = HistoryShortsPipeline(
             use_grok=use_grok_imagine,
             local_only=local_only,
-            upload=upload,
             verbose=verbose,
         )
         
@@ -2002,14 +1770,10 @@ def _run_single(
                 console.print()
                 console.print(create_success_panel(result))
             logger.info(f"🎉 Video generation complete: {result['video_path']}")
-            if result.get('url'):
-                logger.info(f"🔗 YouTube URL: {result['url']}")
         else:
             error_msg = result.get('error', 'Unknown error')
             suggestion = "Check the logs for details and try again with --verbose"
-            if "authentication" in error_msg.lower():
-                suggestion = "Run YouTube authentication or check your API credentials"
-            elif "api" in error_msg.lower():
+            if "api" in error_msg.lower():
                 suggestion = "Check your API keys and network connection"
             
             if not quiet:
@@ -2032,7 +1796,6 @@ def _run_single(
 
 def _run_daily_mode(
     topic: str,
-    upload: bool,
     use_grok_imagine: bool,
     local_only: bool,
     verbose: bool,
@@ -2041,20 +1804,19 @@ def _run_daily_mode(
     """Run in daily mode (continuous generation)."""
     console.print("\n[bold green]🔄 Daily Mode Activated[/bold green]")
     console.print("[dim]Generating one video every hour. Press Ctrl+C to stop.[/dim]\n")
-    
+
     interval = 3600  # 1 hour
-    
+
     iteration = 0
     while not shutdown_requested:
         iteration += 1
         start_time = datetime.now()
-        
+
         console.print(f"\n[bold cyan]═══════ Generation #{iteration} ═══════[/bold cyan]")
-        
+
         # Run single generation
         _run_single(
             topic=topic,
-            upload=upload,
             use_grok_imagine=use_grok_imagine,
             local_only=local_only,
             verbose=verbose,
@@ -2079,26 +1841,6 @@ def _run_daily_mode(
                 remaining = sleep_interval // 60
                 console.print(f"[dim]  Next video in {remaining} minutes...[/dim]")
 
-@app.command("auth")
-def auth_youtube() -> None:
-    """Authenticate with YouTube API."""
-    setup_logging()
-    console.print(Panel(
-        "[bold cyan]YouTube Authentication[/bold cyan]\n\n"
-        "This will open a browser window for OAuth authentication.\n"
-        "Make sure you have [yellow]client_secrets.json[/yellow] in the project directory.\n\n"
-        "Get your credentials from:\n"
-        "https://console.cloud.google.com/apis/credentials",
-        box=box.ROUNDED,
-        border_style="cyan",
-    ))
-    
-    uploader = YouTubeUploader()
-    if uploader.youtube:
-        console.print("\n[green]✅ Already authenticated![/green]")
-    else:
-        console.print("\n[yellow]Authentication required. Please add client_secrets.json[/yellow]")
-
 @app.command("info")
 def show_info() -> None:
     """Show application information and configuration."""
@@ -2116,7 +1858,6 @@ def show_info() -> None:
     table.add_row("TTS Voice", config["tts_voice"])
     table.add_row("Video Resolution", f"{SHORTS_WIDTH}x{SHORTS_HEIGHT}")
     table.add_row("Grok API Available", "✅" if (XAI_AVAILABLE and config["xai_api_key"]) else "❌")
-    table.add_row("YouTube Configured", "✅" if os.path.exists(config["youtube_client_secrets"]) else "❌")
     
     console.print(table)
 
